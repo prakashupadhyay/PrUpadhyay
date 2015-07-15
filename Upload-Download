@@ -1,0 +1,746 @@
+
+*&---------------------------------------------------------------------*
+*& Report  YPRA_PARTNER_LOAD
+*& ALE Utility : To Upload/Download Partner Profiles
+*&---------------------------------------------------------------------*
+REPORT ypra_partner_load NO STANDARD PAGE HEADING MESSAGE-ID ypra_msgid.
+
+INCLUDE YPRA_ALE_TOP.                            " Include for Data Declaration
+INCLUDE YPRA_ALE_SCREEN.                         " Include for Screen Element Description
+INCLUDE YPRA_ALE_CLASS.
+
+**----------------------------------------------------------------------*
+**  INITIALIZATION
+**----------------------------------------------------------------------*
+INITIALIZATION.
+  CREATE OBJECT o_mh_local_enhancement.                     " Local Instance Object
+**----------------------------------------------------------------------*
+**   AT SELECTION SCREEN
+**----------------------------------------------------------------------*
+AT SELECTION-SCREEN ON VALUE-REQUEST FOR p_ofile.
+***** At Selection Screen when Message Control Directory is selected - EDP13
+  CALL METHOD cl_gui_frontend_services=>file_open_dialog
+    EXPORTING
+      window_title            = 'Select File'
+    CHANGING
+      file_table              = filename
+      rc                      = result
+      user_action             = user_action
+    EXCEPTIONS
+      file_open_dialog_failed = 1
+      cntl_error              = 2
+      error_no_gui            = 3
+      not_supported_by_gui    = 4
+      OTHERS                  = 5.
+
+  IF user_action = cl_gui_frontend_services=>action_ok.
+    CLEAR p_ofile.
+    LOOP AT filename INTO fn.
+      p_ofile = fn-filename.
+    ENDLOOP.
+  ENDIF.
+
+***** At Selection Screen when Message Control Directory is selected-EDP12
+AT SELECTION-SCREEN ON VALUE-REQUEST FOR p_ofile1.
+  CALL METHOD cl_gui_frontend_services=>file_open_dialog
+    EXPORTING
+      window_title            = 'Select File'
+    CHANGING
+      file_table              = filename
+      rc                      = result
+      user_action             = user_action
+    EXCEPTIONS
+      file_open_dialog_failed = 1
+      cntl_error              = 2
+      error_no_gui            = 3
+      not_supported_by_gui    = 4
+      OTHERS                  = 5.
+
+  IF user_action = cl_gui_frontend_services=>action_ok.
+    CLEAR p_ofile.
+    LOOP AT filename INTO fn.
+      p_ofile1 = fn-filename.
+    ENDLOOP.
+  ENDIF.
+
+***** At Selection Screen when Inbound Parameters Directory is selected-EDP21
+AT SELECTION-SCREEN ON VALUE-REQUEST FOR p_ifile.
+  CALL METHOD cl_gui_frontend_services=>file_open_dialog
+    EXPORTING
+      window_title            = 'Select File'
+    CHANGING
+      file_table              = filename
+      rc                      = result
+      user_action             = user_action
+    EXCEPTIONS
+      file_open_dialog_failed = 1
+      cntl_error              = 2
+      error_no_gui            = 3
+      not_supported_by_gui    = 4
+      OTHERS                  = 5.
+
+  IF user_action = cl_gui_frontend_services=>action_ok.
+    CLEAR p_ifile.
+    LOOP AT filename INTO fn.
+      p_ifile = fn-filename.
+    ENDLOOP.
+  ENDIF.
+
+*----------------------------------------------------------------------*
+*   Start-of-Selection
+*----------------------------------------------------------------------*
+
+START-OF-SELECTION.
+  REFRESH: lt_asc_file.
+
+***  converts a unicode code point (hexa representation) into a character
+  CALL METHOD cl_abap_conv_in_ce=>uccp
+    EXPORTING
+      uccp = lv_tabulator_hex
+    RECEIVING
+      char = lv_tabulator.
+
+
+**********************************************************************
+*  Download DATA                                                     *
+**********************************************************************
+  IF p_down = 'X'.
+    IF p_out = 'X'.   " Outbound
+      PERFORM get_data USING lc_edp13 p_ofile.  " EDP13
+      PERFORM get_data USING lc_edp12 p_ofile1. " EDP12
+    ENDIF.
+
+    IF p_in = 'X'.    " Inbound
+      PERFORM get_data USING lc_edp21 p_ifile.  " EDP21
+    ENDIF.
+
+**********************************************************************
+*   Upload DATA                                                      *
+**********************************************************************
+  ELSEIF p_mod = 'X'.                           " Modify
+    PERFORM upload.          " Upload the Parameters
+    PERFORM modify_partners. " Modify the Partners
+  ELSEIF p_ins = 'X'.                           " Insert
+    PERFORM upload.          " Upload the Parameters
+    PERFORM create_partners. " Create New Partners
+  ENDIF.
+
+*&--------------------------------------------------------------------*
+*&      Form  get_data_and_Download
+*&--------------------------------------------------------------------*
+*       text
+*---------------------------------------------------------------------*
+FORM get_data USING p_tabnam    " TableName
+                    p_filename. " Filename
+  REFRESH lt_asc_file.
+  CLEAR lt_asc_file-string.
+
+* Add header line
+  CALL FUNCTION 'DDIF_NAMETAB_GET'
+    EXPORTING
+      tabname   = p_tabnam
+    TABLES
+      x031l_tab = lt_fields
+    EXCEPTIONS
+      not_found = 1
+      OTHERS    = 2.
+
+  IF sy-subrc <> 0.
+    MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
+            WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+  ENDIF.
+
+  SORT lt_fields BY position.
+
+  LOOP AT lt_fields.
+    CHECK lt_fields-fieldname NE '.INCLUDE'.
+    PERFORM add_field USING lt_fields-fieldname.
+  ENDLOOP.
+  APPEND lt_asc_file.
+
+*-create a data reference of type selected table
+  CREATE DATA lv_dref TYPE  STANDARD TABLE OF (p_tabnam).
+  ASSIGN lv_dref->* TO <fs_tab>.
+
+
+* Create dynamic work area and assign to FS
+  CREATE DATA lv_dref LIKE LINE OF <fs_tab>.
+  ASSIGN lv_dref->* TO <s_tab>.
+
+
+* Get Data
+  IF  p_tabnam = lc_edp13.
+    SELECT * FROM edp13 INTO TABLE <fs_tab>
+       WHERE rcvprn IN s_rcvprn AND
+             rcvprt IN s_rcvprt AND
+             rcvpfc IN s_rcvpfc AND
+             mestyp IN s_omestp AND
+             mescod IN s_omescd AND
+             mesfct IN s_omesft AND
+             test   IN s_otest  AND
+             usrtyp IN s_ousrtp AND
+             usrkey IN s_ousrky AND
+             usrlng IN s_ousrlg AND
+             rcvpor IN s_rcvpor AND
+            idoctyp IN s_idoctp AND
+             cimtyp IN s_cimtyp AND
+             segrel IN s_segrel.
+
+    IF sy-subrc <> 0.
+      WRITE: / 'No data selected for', p_tabnam.
+    ENDIF.
+
+  ELSEIF  p_tabnam = lc_edp12.
+    SELECT * FROM edp12 INTO TABLE <fs_tab>
+       WHERE rcvprn IN s_rcvprn AND
+       rcvprt IN s_rcvprt AND
+       rcvpfc IN s_rcvpfc AND
+       mestyp IN s_omestp AND
+       mescod IN s_omescd AND
+       mesfct IN s_omesft AND
+       test   IN s_otest.
+
+    IF sy-subrc <> 0.
+      WRITE: / 'No data selected for', p_tabnam.
+    ENDIF.
+
+  ELSEIF p_tabnam = lc_edp21.
+    SELECT * FROM edp21 INTO TABLE <fs_tab>
+       WHERE sndprn IN s_sndprn AND
+       sndprt IN s_sndprt AND
+       sndpfc IN s_sndpfc AND
+       mestyp IN s_imestp AND
+       mescod IN s_imescd AND
+       mesfct IN s_imesft AND
+       test   IN s_itest AND
+       usrtyp IN s_iusrtp AND
+       usrkey IN s_iusrky AND
+       usrlng IN s_iusrlg.
+
+  ENDIF.
+* Add delimiters and append to file
+  LOOP AT <fs_tab> INTO <s_tab>.
+    CLEAR lt_asc_file-string.
+    LOOP AT lt_fields.
+      CHECK lt_fields-fieldname NE '.INCLUDE'.
+      CONCATENATE '<s_tab>-' lt_fields-fieldname INTO lv_fieldname.
+      ASSIGN (lv_fieldname) TO <fieldvalue>.
+      PERFORM add_field USING <fieldvalue>.
+    ENDLOOP.
+    APPEND lt_asc_file.
+  ENDLOOP.
+
+* Download file
+  lv_filename = p_filename.
+  CHECK NOT lv_filename IS INITIAL.
+  CALL FUNCTION 'GUI_DOWNLOAD'
+    EXPORTING
+      filename         = lv_filename
+      filetype         = 'ASC'
+    TABLES
+      data_tab         = lt_asc_file
+    EXCEPTIONS
+      file_write_error = 01
+      no_batch         = 04
+      unknown_error    = 05
+      OTHERS           = 99.
+
+  IF sy-subrc = 0.
+    WRITE: / 'Partner Profiles downloaded to File:', lv_filename.
+  ELSE.
+    WRITE: / 'Error writing File:', lv_filename.
+  ENDIF.
+
+
+ENDFORM.                    "get_data
+
+*&--------------------------------------------------------------------*
+*&      Form  add_field
+*&--------------------------------------------------------------------*
+FORM add_field USING p_field.
+
+  CONCATENATE lt_asc_file-string p_field      INTO lt_asc_file-string.
+  CONCATENATE lt_asc_file-string lv_tabulator INTO lt_asc_file-string.
+
+ENDFORM.                    "add_field
+
+
+*&--------------------------------------------------------------------*
+*&      Form  upload_data
+*&--------------------------------------------------------------------*
+*       text
+*---------------------------------------------------------------------*
+FORM upload_data USING p_tabnam.
+  DATA: lv_file TYPE string.
+  DATA: lt_temp TYPE TABLE OF string WITH HEADER LINE.
+
+
+* get Fields
+  CALL FUNCTION 'DDIF_NAMETAB_GET'
+    EXPORTING
+      tabname   = p_tabnam
+    TABLES
+      x031l_tab = lt_fields
+    EXCEPTIONS
+      not_found = 1
+      OTHERS    = 2.
+  IF sy-subrc <> 0.
+    MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
+            WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+  ENDIF.
+  SORT lt_fields BY position.
+
+*-create a data reference of type selected table
+  CREATE DATA lv_dref TYPE  STANDARD TABLE OF (p_tabnam).
+  ASSIGN lv_dref->* TO <fs_tab>.
+
+
+* Create dynamic work area and assign to FS
+  CREATE DATA lv_dref LIKE LINE OF <fs_tab>.
+  ASSIGN lv_dref->* TO <s_tab>.
+
+  CALL FUNCTION 'GUI_UPLOAD'
+    EXPORTING
+      filename         = lv_filename
+      filetype         = 'ASC'
+    TABLES
+      data_tab         = lt_asc_file
+    EXCEPTIONS
+      file_write_error = 01
+      no_batch         = 04
+      unknown_error    = 05
+      OTHERS           = 99.
+
+  IF sy-subrc NE 0.
+    REFRESH: lt_asc_file.
+    WRITE: /'Error reading File:', lv_filename.
+  ELSE.
+* Eliminate Header line and check file.
+    READ TABLE lt_asc_file INDEX 1.
+    IF sy-subrc NE 0.
+      WRITE: / 'Wrong format or File is empty.'.
+      EXIT.
+    ENDIF.
+
+    SPLIT lt_asc_file-string AT lv_tabulator INTO TABLE lt_temp.
+    CLEAR lv_tabix.
+    LOOP AT lt_fields.
+      ADD 1 TO lv_tabix.
+      READ TABLE lt_temp INDEX lv_tabix.
+      IF lt_fields-fieldname NE lt_temp.
+        WRITE: / 'Please check file format. It is best to download a fresh copy of ', p_tabnam, ' for the correct format.'.
+        STOP.
+      ENDIF.
+    ENDLOOP.
+
+    DELETE lt_asc_file INDEX 1.
+* Check client
+    READ TABLE lt_asc_file INDEX 1.
+    SPLIT lt_asc_file-string AT lv_tabulator INTO TABLE lt_temp.
+    READ TABLE lt_temp INDEX 1.
+    IF   lt_temp NE sy-mandt.
+      WRITE: / 'Please check the file. The client in the file is: ', lt_temp , ', while it should be ', sy-mandt.
+      STOP.
+    ENDIF.
+* Populate Table
+    REFRESH <fs_tab>.
+    LOOP AT lt_asc_file.
+      SPLIT lt_asc_file-string AT lv_tabulator INTO TABLE lt_temp.
+
+      CLEAR lv_tabix.
+      CLEAR <s_tab>.
+      LOOP AT lt_fields.
+        ADD 1 TO lv_tabix.
+        READ TABLE lt_temp INDEX lv_tabix.
+        IF  sy-subrc = 0.
+          CONCATENATE '<s_tab>-' lt_fields-fieldname INTO lv_fieldname.
+          ASSIGN (lv_fieldname) TO <fieldvalue>.
+          <fieldvalue> = lt_temp.
+        ENDIF.
+      ENDLOOP.
+      APPEND <s_tab> TO <fs_tab>.
+    ENDLOOP.
+  ENDIF.
+
+  IF  p_tabnam = lc_edp13.
+    lt_edp13[] =  <fs_tab>[].
+  ELSEIF  p_tabnam = lc_edp12.                               "+MOD-004
+    lt_edp12[] = <fs_tab>[].                                  "+MOD-004
+  ELSEIF  p_tabnam = lc_edp21.
+    lt_edp21[] = <fs_tab>[].
+  ENDIF.
+ENDFORM.                    "upload_data
+*&---------------------------------------------------------------------*
+*&      Form  MODIFY_PARTNERS
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+*  -->  p1        text
+*  <--  p2        text
+*----------------------------------------------------------------------*
+FORM modify_partners .
+  PERFORM popup USING lc_change.
+
+  WRITE: / 'Only partners with errors are reported. The rest have been updated successfully'.
+  IF p_out = 'X'.
+    LOOP AT lt_edp13.
+* Lock EDP13 table
+      CALL FUNCTION 'ENQUEUE_EDP13'
+        EXPORTING
+          mode_edp13     = lc_mode_e
+          mandt          = sy-mandt
+          rcvprn         = lt_edp13-rcvprn
+          rcvprt         = lt_edp13-rcvprt
+          rcvpfc         = lt_edp13-rcvpfc
+          mestyp         = lt_edp13-mestyp
+          mescod         = lt_edp13-mescod
+          mesfct         = lt_edp13-mesfct
+          test           = lt_edp13-test
+        EXCEPTIONS
+          foreign_lock   = 1
+          system_failure = 2
+          OTHERS         = 3.
+
+      IF sy-subrc <> 0.
+*    Lock failed / Do not update port
+        WRITE: / 'Outbound Partner Profile:',
+                  lt_edp13-rcvprn,
+                  lt_edp13-mestyp, ' - '.
+        WRITE: 'Lock failed for partner'.
+        CONTINUE.
+      ENDIF.
+
+* modify entry in table edp13
+      CALL FUNCTION 'EDI_AGREE_OUT_MESSTYPE_UPDATE'
+        EXPORTING
+          rec_edp13 = lt_edp13
+        EXCEPTIONS
+          OTHERS    = 1.
+      IF sy-subrc <> 0.
+        MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
+                WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4
+                INTO lv_mess.
+        WRITE: / 'Outbound Partner Profile:',
+                  lt_edp13-rcvprn,
+                  lt_edp13-mestyp, ' - ', (100) lv_mess.
+      ENDIF.
+* unlock partner tables
+      CALL FUNCTION 'DEQUEUE_ALL'.
+    ENDLOOP.
+
+* change tab MESSAGE CONTROL of outbound parameters
+    IF lt_edp12[] IS NOT INITIAL.
+      SORT lt_edp12.
+      LOOP AT lt_edp12.
+* Lock EDP12 table
+        CALL FUNCTION 'ENQUEUE_EDP12'
+          EXPORTING
+            mode_edp12     = lc_mode_e
+            mandt          = sy-mandt
+            rcvprn         = lt_edp12-rcvprn
+            rcvprt         = lt_edp12-rcvprt
+            rcvpfc         = lt_edp12-rcvpfc
+            kappl          = lt_edp12-kappl
+            kschl          = lt_edp12-kschl
+            aende          = lt_edp12-aende
+          EXCEPTIONS
+            foreign_lock   = 1
+            system_failure = 2
+            OTHERS         = 3.
+
+        IF sy-subrc <> 0.
+*    Lock failed / Do not update port
+          WRITE: / 'Outbound Partner Profile - MESSAGE CONTROL tab',
+                    lt_edp12-rcvprn,
+                    lt_edp12-mestyp,
+                    lt_edp12-kappl,
+                    lt_edp12-kschl,
+                    lt_edp12-evcoda, ' - '.
+          WRITE: 'Lock failed for partner'.
+          CONTINUE.
+        ENDIF.
+
+        CALL FUNCTION 'EDI_AGREE_OUT_IDOC_UPDATE'
+          EXPORTING
+            rec_edp12       = lt_edp12
+          EXCEPTIONS
+            db_error        = 1
+            entry_not_exist = 2
+            parameter_error = 3
+            OTHERS          = 4.
+        IF  sy-subrc <> 0.
+          MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
+                  WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4
+                  INTO lv_mess.
+          WRITE: / 'Outbound Partner Profile - MESSAGE CONTROL tab',
+                    lt_edp12-rcvprn,
+                    lt_edp12-mestyp,
+                    lt_edp12-kappl,
+                    lt_edp12-kschl,
+                    lt_edp12-evcoda, ' - ', (100) lv_mess.
+        ENDIF.
+
+* unlock partner tables
+        CALL FUNCTION 'DEQUEUE_ALL'.
+
+      ENDLOOP.
+    ENDIF.
+
+  ENDIF.
+
+  IF p_in = 'X'.
+    LOOP AT lt_edp21.
+
+
+* Lock EDP21 table
+      CALL FUNCTION 'ENQUEUE_EDP21'
+        EXPORTING
+          mode_edp21     = lc_mode_e
+          mandt          = sy-mandt
+          sndprn         = lt_edp21-sndprn
+          sndprt         = lt_edp21-sndprt
+          sndpfc         = lt_edp21-sndpfc
+          mestyp         = lt_edp21-mestyp
+          mescod         = lt_edp21-mescod
+          mesfct         = lt_edp21-mesfct
+          test           = lt_edp21-test
+        EXCEPTIONS
+          foreign_lock   = 1
+          system_failure = 2
+          OTHERS         = 3.
+      IF sy-subrc <> 0.
+*    Lock failed / Do not update port
+        WRITE: / 'Inbound Partner Profile:',
+                 lt_edp21-sndprn,
+                 lt_edp21-mestyp, ' - '.
+        WRITE:   'Lock failed for partner'.
+        CONTINUE.
+      ENDIF.
+
+      CALL FUNCTION 'EDI_AGREE_IN_MESSTYPE_UPDATE'
+        EXPORTING
+          rec_edp21 = lt_edp21
+        EXCEPTIONS
+          OTHERS    = 1.
+      IF sy-subrc NE 0.
+        MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
+                WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4
+                INTO lv_mess.
+        WRITE: / 'Inbound Partner Profile for Message:',
+                  lt_edp21-sndprn,
+                  lt_edp21-mestyp, ' - ', (100) lv_mess.
+      ENDIF.
+* unlock partner tables
+      CALL FUNCTION 'DEQUEUE_ALL'.
+
+    ENDLOOP.
+  ENDIF.    " p_in = 'X'.
+
+
+
+ENDFORM.                    " MODIFY_PARTNERS
+*&---------------------------------------------------------------------*
+*&      Form  CREATE_PARTNERS
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+*  -->  p1        text
+*  <--  p2        text
+*----------------------------------------------------------------------*
+FORM create_partners .
+
+  PERFORM popup USING lc_create.
+
+  WRITE: / 'Only partners with errors are reported. The rest have been updated successfully'.
+
+  IF p_out = 'X'.
+    SORT lt_edp13.                                           " MOD 003
+    LOOP AT lt_edp13.
+      AT NEW rcvprt. " check at this level in case two different types of partner have the same number
+        PERFORM create_new_partner USING lt_edp13-rcvprn lt_edp13-rcvprt.
+      ENDAT.
+*     End of MOD 003
+
+      CALL FUNCTION 'EDI_AGREE_OUT_MESSTYPE_INSERT'
+        EXPORTING
+          rec_edp13 = lt_edp13
+        EXCEPTIONS
+          OTHERS    = 1.
+
+      IF sy-subrc NE 0.
+        MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
+                WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4
+                INTO lv_mess.
+        WRITE: / 'Outbound Partner Profile:',
+                  lt_edp13-rcvprn,
+                  lt_edp13-mestyp, ' - ', (100) lv_mess.
+      ENDIF.
+
+    ENDLOOP.
+
+* create tab MESSAGE CONTROL of outbound parameters
+    IF lt_edp12[] IS NOT INITIAL.
+      SORT lt_edp12.
+      LOOP AT lt_edp12.
+
+        CALL FUNCTION 'EDI_AGREE_OUT_IDOC_INSERT'
+          EXPORTING
+            rec_edp12           = lt_edp12
+          EXCEPTIONS
+            db_error            = 1
+            entry_already_exist = 2
+            parameter_error     = 3
+            OTHERS              = 4.
+        IF sy-subrc <> 0.
+          MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
+                  WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4
+                  INTO lv_mess.
+          WRITE: / 'Outbound Partner Profile - MESSAGE CONTROL tab',
+                    lt_edp12-rcvprn,
+                    lt_edp12-mestyp,
+                    lt_edp12-kappl,
+                    lt_edp12-kschl,
+                    lt_edp12-evcoda, ' - ', (100) lv_mess.
+        ENDIF.
+
+      ENDLOOP.
+    ENDIF.
+  ENDIF.
+
+  IF p_in = 'X'.
+
+    SORT lt_edp21.                                           " MOD 003
+    LOOP AT lt_edp21.
+**   Check if partner needs to be created.
+      AT NEW sndprt. " check at this level in case two different types of partner have the same number ie LS and KU
+        PERFORM create_new_partner USING lt_edp21-sndprn lt_edp21-sndprt.
+      ENDAT.
+*     End of MOD 003
+
+      CALL FUNCTION 'EDI_AGREE_IN_MESSTYPE_INSERT'
+        EXPORTING
+          rec_edp21           = lt_edp21
+        EXCEPTIONS
+          db_error            = 1
+          entry_already_exist = 2
+          parameter_error     = 3
+          OTHERS              = 4.
+      IF  sy-subrc NE 0.
+        MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
+        WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4
+        INTO lv_mess.
+        WRITE: / 'Inbound Partner Profile:',
+                 lt_edp21-sndprn,
+                 lt_edp21-mestyp, ' - ', (100) lv_mess.
+      ENDIF.
+    ENDLOOP.
+  ENDIF.    " p_in = 'X'.
+ENDFORM.                    " CREATE_PARTNERS
+
+*&---------------------------------------------------------------------*
+*&      Form  create_new_partner
+*&---------------------------------------------------------------------*
+*----------------------------------------------------------------------*
+*      -->P_PARNUM   text
+*      -->P_PARTYP   text
+*----------------------------------------------------------------------*
+FORM create_new_partner USING p_parnum p_partyp.
+
+* Check if partner exists
+  SELECT SINGLE parnum FROM edpp1 INTO lt_edpp1-parnum WHERE parnum = p_parnum
+                                       AND partyp = p_partyp.
+  IF sy-subrc NE 0. " If doesnt exist create a new one
+    CLEAR lt_edpp1.
+    REFRESH lt_edpp1.
+    lt_edpp1-parnum = p_parnum.
+    lt_edpp1-partyp = p_partyp.
+    lt_edpp1-matlvl = 'A'.
+    lt_edpp1-usrtyp = p_usrtyp.
+    lt_edpp1-usrkey = p_usrkey.
+    lt_edpp1-usrlng = p_usrlng.
+    APPEND lt_edpp1.
+    CALL FUNCTION 'EDI_AGREE_PARTNER_INSERT'
+      EXPORTING
+        rec_edpp1           = lt_edpp1
+        no_ptype_check      = ' '
+      EXCEPTIONS
+        db_error            = 1
+        entry_already_exist = 2
+        parameter_error     = 3
+        OTHERS              = 4.
+    IF sy-subrc <> 0.
+      MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
+        WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4
+        INTO lv_mess.
+      WRITE: / 'Partner Creation:',
+                p_parnum,
+                p_partyp, ' - ', (100) lv_mess.
+    ENDIF.
+
+  ENDIF.
+ENDFORM.                    "create_new_partner
+*&---------------------------------------------------------------------*
+*&      Form  UPLOAD
+*&---------------------------------------------------------------------*
+*----------------------------------------------------------------------*
+FORM upload .
+  IF p_out = 'X'.
+    lv_filename = p_ofile.
+    PERFORM upload_data USING lc_edp13.
+
+    IF NOT p_ofile1 IS INITIAL.
+      lv_filename = p_ofile1.
+      REFRESH lt_asc_file.
+      PERFORM upload_data USING lc_edp12.
+    ENDIF.
+  ENDIF.
+  IF p_in = 'X'.
+    lv_filename = p_ifile.
+    PERFORM upload_data USING lc_edp21.
+  ENDIF.
+ENDFORM.                    " UPLOAD
+*&---------------------------------------------------------------------*
+*&      Form  POPUP
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+*      -->P_C_CREATE  text
+*----------------------------------------------------------------------*
+FORM popup  USING    p_mode.
+
+* Populate popup parameter
+  REFRESH lt_param.
+  DESCRIBE TABLE lt_edp13 LINES lv_lines.
+  lt_param-param = 'OUT'.
+  lt_param-value = lv_lines.
+  APPEND lt_param.
+
+  DESCRIBE TABLE lt_edp21 LINES lv_lines.
+  lt_param-param = 'IN'.
+  lt_param-value = lv_lines.
+  APPEND lt_param.
+
+  lt_param-param = 'MODE'.
+  lt_param-value = p_mode.
+  APPEND lt_param.
+
+  CALL FUNCTION 'POPUP_TO_CONFIRM'
+    EXPORTING
+      titlebar       = 'Perform Selection'
+      text_question  = 'You are about to &MODE& &OUT& Outbound and &IN& Inbound Partner profiles. Continue?'
+    IMPORTING
+      answer         = lv_ans
+    TABLES
+      parameter      = lt_param
+    EXCEPTIONS
+      text_not_found = 1
+      OTHERS         = 2.
+  IF sy-subrc <> 0.
+    MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
+            WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+  ELSE.
+    IF  lv_ans NE '1'.
+      STOP.
+    ENDIF.
+  ENDIF.
+ENDFORM.                    "popup
